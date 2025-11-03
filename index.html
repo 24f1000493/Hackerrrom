@@ -104,7 +104,6 @@
            preload="auto"
            poster=""
            tabindex="-1">
-      <!-- Make sure your file is named Video.mp4 and located beside this HTML -->
       <source src="Video.mp4.mp4" type="video/mp4"/>
       Your browser doesn't support video.
     </video>
@@ -203,8 +202,6 @@
     let startTime = null;
     let completionTime = null;
     let currentQuestion = null;
-    let questionAnswered = false;
-    let locked = false; // profile lock flag
 
     const questions = [
       { question: "What is the time complexity of binary search?", answer: "o(log n)" },
@@ -240,6 +237,7 @@
       reinit();
 
       setInterval(() => {
+        // ensure columns reflect width if resized
         if (Math.floor(canvas.width / fontSize) !== columns) reinit();
         ctx.fillStyle = "rgba(0,0,0,0.05)";
         ctx.fillRect(0,0,canvas.width,canvas.height);
@@ -259,38 +257,53 @@
     createMatrixBackground('matrix3');
 
     /* ========== Video autoplay / fallback handling ========== */
+
+    // Try to autoplay with sound. If blocked, autoplay muted and show overlay to enable sound.
     async function tryAutoplayWithSound() {
+      // Start with sound unmuted attempt
       try {
         introVideo.muted = false;
-        await introVideo.play();
+        await introVideo.play(); // may reject if autoplay blocked
+        // success: video playing with sound
         playOverlay.style.display = 'none';
       } catch (err) {
+        // autoplay with sound blocked -> fallback to muted autoplay
         try {
           introVideo.muted = true;
           await introVideo.play();
+          // show overlay for user to enable sound (one click)
           playOverlay.style.display = 'flex';
         } catch (err2) {
+          // even muted autoplay blocked (rare) - show overlay to let user start
           playOverlay.style.display = 'flex';
         }
       }
     }
 
+    // Attempt autoplay on load
     document.addEventListener('DOMContentLoaded', () => {
-      setTimeout(() => { tryAutoplayWithSound(); }, 150);
+      // Short delay to allow browser to settle
+      setTimeout(() => {
+        tryAutoplayWithSound();
+      }, 150);
     });
 
+    // When user clicks overlay button, unmute and play from current time
     playWithSoundBtn.addEventListener('click', async () => {
       try {
         introVideo.muted = false;
+        // Some browsers require a play call after unmuting
         await introVideo.play();
         playOverlay.style.display = 'none';
       } catch (e) {
+        // fallback: set currentTime to same point and try again after unmute
         introVideo.muted = false;
-        introVideo.play().catch(()=>{});
+        introVideo.play().catch(()=>{ /* if still blocked, no more options */ });
         playOverlay.style.display = 'none';
       }
     });
 
+    // Also allow clicking the video area to unmute and play with sound (helpful for mobile)
     introVideo.addEventListener('click', async () => {
       if (introVideo.muted) {
         introVideo.muted = false;
@@ -299,16 +312,25 @@
       }
     });
 
+    // If video ends naturally, go to timer screen
     introVideo.addEventListener('ended', () => showTimerScreen());
 
+    // Skip button
     skipVideoBtn.addEventListener('click', () => {
+      // if video playing, pause it
       introVideo.pause();
+      // hide overlay if visible
       playOverlay.style.display = 'none';
       showTimerScreen();
     });
 
+    // If autoplay fails entirely and the user never interacts, after a short timeout show timer screen
     setTimeout(() => {
+      // if video hasn't started playing and overlay is visible, allow user to decide;
+      // but if overlay hidden and video is paused, show timer after 8s to avoid blocking
       if (introVideo.paused && playOverlay.style.display !== 'flex') {
+        // don't auto-advance immediately if user may want to click - keep to 8s
+        // (we only auto-advance to keep UX predictable)
         showTimerScreen();
       }
     }, 8000);
@@ -317,6 +339,7 @@
     function showTimerScreen() {
       introScreen.classList.add('hidden');
       timerScreen.classList.remove('hidden');
+      // record start time
       startTime = new Date();
       startTimer();
     }
@@ -335,17 +358,10 @@
       }, 1000);
     }
 
-    /* ========== Recovery code logic (UNLIMITED tries allowed) ========== */
     submitCode.addEventListener('click', checkCode);
     codeInput.addEventListener('keypress', (e)=>{ if (e.key === 'Enter') checkCode(); });
 
     function checkCode() {
-      if (locked) {
-        // no second chance once locked
-        alert('Profile locked — no further code attempts allowed.');
-        return;
-      }
-      // unlimited attempts allowed here
       if (codeInput.value.trim() === '2777') {
         if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
         timerScreen.classList.add('hidden');
@@ -358,19 +374,14 @@
       }
     }
 
-    /* ========== Question logic ========== */
     function askQuestion() {
-      if (locked) return;
       if (questionTimer) clearInterval(questionTimer);
-      questionAnswered = false;
       questionTimeLeft = 30;
       timeLeftElement.textContent = `TIME: ${questionTimeLeft}s`;
       const idx = Math.floor(Math.random() * questions.length);
       currentQuestion = questions[idx];
       questionText.textContent = currentQuestion.question;
       answerInput.value = '';
-      answerInput.disabled = false;
-      submitAnswer.disabled = false;
       answerInput.focus();
 
       questionTimer = setInterval(() => {
@@ -378,8 +389,7 @@
         timeLeftElement.textContent = `TIME: ${questionTimeLeft}s`;
         if (questionTimeLeft <= 0) {
           clearInterval(questionTimer);
-          // auto-submit if not already answered
-          if (!questionAnswered) checkAnswer();
+          checkAnswer(); // auto-submit
         }
       }, 1000);
     }
@@ -388,68 +398,18 @@
     answerInput.addEventListener('keypress', (e)=>{ if (e.key === 'Enter') checkAnswer(); });
 
     function checkAnswer() {
-      if (questionAnswered || locked) return;
-      questionAnswered = true;
       if (questionTimer) { clearInterval(questionTimer); questionTimer = null; }
       completionTime = new Date();
-
       const userAnswer = (answerInput.value || '').trim().toLowerCase();
       const correct = (currentQuestion.answer || '').toLowerCase();
-
-      // disable answer input to prevent reattempt
-      answerInput.disabled = true;
-      submitAnswer.disabled = true;
-
       if (userAnswer === correct) {
         showResult(true, "SRM-ONE IS BACK LIVE! System recovery successful.");
       } else {
-        // WRONG => lock profile, no restart, no second chance to re-enter code
-        lockProfile("YOUR ACCOUNT IS STILL UNDER HACKER CONTROL. Security protocol failed. PROFILE LOCKED.");
+        showResult(false, "YOUR ACCOUNT IS STILL UNDER HACKER CONTROL. Security protocol failed.");
       }
     }
 
-    /* ========== Lock behavior ========== */
-    function lockProfile(message) {
-      locked = true;
-      // stop any running timers
-      if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
-      if (questionTimer) { clearInterval(questionTimer); questionTimer = null; }
-
-      // disable inputs & buttons permanently in-page
-      try { codeInput.disabled = true; } catch(e){}
-      try { submitCode.disabled = true; } catch(e){}
-      try { answerInput.disabled = true; } catch(e){}
-      try { submitAnswer.disabled = true; } catch(e){}
-
-      // disable/hide restart (no restart allowed after lock)
-      try { restartBtn.disabled = true; restartBtn.style.opacity = 0.5; restartBtn.style.pointerEvents = 'none'; } catch(e){}
-
-      // show locked result (no restart)
-      questionScreen.classList.add('hidden');
-      resultScreen.classList.remove('hidden');
-
-      // compute completion time
-      let formatted = "00:00";
-      if (startTime && completionTime) {
-        const diff = completionTime - startTime;
-        const mins = Math.floor(diff / 60000);
-        const secs = Math.floor((diff % 60000) / 1000);
-        formatted = `${String(mins).padStart(2,'0')}:${String(secs).padStart(2,'0')}`;
-      }
-      completionTimeElement.textContent = `Completion Time: ${formatted}`;
-
-      // show locked message
-      resultMessage.innerHTML = `<h2 class="error">ACCESS DENIED</h2><p>${message}</p><p style="color:#ff0000; margin-top:8px;">Profile locked — contact administrator to restore access.</p>`;
-    }
-
-    /* ========== Result & Restart ========== */
     function showResult(success, message) {
-      // if already locked, keep locked behavior
-      if (locked) {
-        lockProfile(message);
-        return;
-      }
-
       questionScreen.classList.add('hidden');
       resultScreen.classList.remove('hidden');
 
@@ -465,44 +425,26 @@
 
       if (success) {
         resultMessage.innerHTML = `<h2 class="success">ACCESS GRANTED</h2><p>${message}</p>`;
-        // ensure restart is available on success
-        restartBtn.disabled = false;
-        restartBtn.style.opacity = 1;
-        restartBtn.style.pointerEvents = '';
       } else {
-        // for non-locked failure flow (rare), show denied and still allow restart
         resultMessage.innerHTML = `<h2 class="error">ACCESS DENIED</h2><p>${message}</p>`;
-        restartBtn.disabled = false;
-        restartBtn.style.opacity = 1;
-        restartBtn.style.pointerEvents = '';
       }
     }
 
     restartBtn.addEventListener('click', restartProtocol);
 
     function restartProtocol() {
-      if (locked) {
-        alert('Profile locked — restart not allowed.');
-        return;
-      }
-
       // reset state
       timeLeft = 600; questionTimeLeft = 30;
       timerElement.textContent = "10:00";
-      codeInput.value = ''; codeInput.placeholder = ''; codeInput.disabled = false;
-      submitCode.disabled = false;
-      answerInput.value = ''; answerInput.disabled = false;
-      submitAnswer.disabled = false;
-      questionAnswered = false;
-      completionTime = null;
-      currentQuestion = null;
-
-      // UI
+      codeInput.value = ''; codeInput.placeholder = '';
+      answerInput.value = '';
       resultScreen.classList.add('hidden');
       introScreen.classList.remove('hidden');
 
-      // rewind video and try autoplay again
-      try { introVideo.currentTime = 0; } catch(e){}
+      // rewind video and attempt autoplay again
+      try {
+        introVideo.currentTime = 0;
+      } catch(e) {}
       tryAutoplayWithSound();
     }
 
