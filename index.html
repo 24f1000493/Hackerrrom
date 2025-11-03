@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>System Recovery Protocol</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; font-family:'Courier New', monospace; }
+    html,body { height:100%; }
+    body {
+      background:#000;
+      color:#ff0000;
+      overflow:hidden;
+      height:100vh;
+    }
+
+    .screen {
+      position:absolute;
+      inset:0;
+      display:flex;
+      flex-direction:column;
+      justify-content:center;
+      align-items:center;
+      transition:opacity .45s ease, visibility .45s;
+      visibility:visible;
+    }
+    .hidden { opacity:0; pointer-events:none; visibility:hidden; }
+
+    /* Video */
+    #introVideo {
+      position:fixed;
+      top:0; left:0;
+      width:100%;
+      height:100%;
+      object-fit:cover;
+      z-index:5;
+      background:#000;
+    }
+
+    /* An overlay shown when autoplay with sound is blocked */
+    #playWithSoundOverlay {
+      position:fixed;
+      inset:0;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      z-index:15;
+      pointer-events:auto;
+      background: rgba(0,0,0,0.45);
+    }
+    .play-btn {
+      border:2px solid #ff0000;
+      color:#ff0000;
+      background:transparent;
+      padding:14px 22px;
+      font-size:1.25rem;
+      cursor:pointer;
+      box-shadow:0 0 18px rgba(255,0,0,0.12);
+    }
+    .play-btn:hover { background:#ff0000; color:#000; }
+
+    .terminal {
+      background:#000;
+      border:1px solid #ff0000;
+      padding:20px;
+      width:80%;
+      max-width:820px;
+      box-shadow:0 0 20px rgba(255,0,0,0.5);
+      z-index:20;
+    }
+    .terminal-header { border-bottom:1px solid #ff0000; padding-bottom:10px; margin-bottom:18px; display:flex; justify-content:space-between; }
+    .timer { font-size:3rem; margin:18px 0; text-shadow:0 0 10px #ff0000; }
+    .code-input,.answer-input {
+      background:transparent; border:1px solid #ff0000; color:#ff0000; padding:10px; font-size:1.2rem;
+    }
+    .code-input { width:200px; text-align:center; }
+    .btn {
+      background:transparent; border:1px solid #ff0000; color:#ff0000; padding:10px 18px; cursor:pointer; margin:10px; transition:all .2s;
+    }
+    .btn:hover { background:#ff0000; color:#000; box-shadow:0 0 15px #ff0000; }
+    .matrix { position:fixed; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:1; opacity:0.25; }
+    .success { color:#00ff00; text-shadow:0 0 10px #00ff00; }
+    .error { color:#ff0000; text-shadow:0 0 10px #ff0000; }
+    .completion-time { font-size:1.1rem; margin-top:12px; color:#00ff00; }
+
+    .skip-btn {
+      position:fixed; bottom:18px; right:18px; z-index:25; background:rgba(0,0,0,0.6);
+      border:1px solid #ff0000; color:#ff0000; padding:8px 14px; cursor:pointer;
+    }
+
+    /* small screens */
+    @media (max-width:520px){
+      .terminal { width:92%; padding:14px; }
+      .timer { font-size:2rem; }
+      .play-btn { font-size:1rem; padding:10px 14px; }
+    }
+  </style>
+</head>
+<body>
+  <!-- Intro Video Screen -->
+  <div id="introScreen" class="screen">
+    <video id="introVideo"
+           playsinline webkit-playsinline
+           preload="auto"
+           poster=""
+           tabindex="-1">
+      <source src="Video.mp4.mp4" type="video/mp4"/>
+      Your browser doesn't support video.
+    </video>
+
+    <!-- Overlay shown when autoplay-with-sound blocked or when we want user to enable sound -->
+    <div id="playWithSoundOverlay" style="display:none;">
+      <div style="text-align:center;">
+        <p style="color:#ff0000; margin-bottom:10px;">Click to play the intro with sound</p>
+        <button class="play-btn" id="playWithSoundBtn">PLAY WITH SOUND</button>
+      </div>
+    </div>
+
+    <button class="skip-btn" id="skipVideo">SKIP</button>
+  </div>
+
+  <!-- Timer Screen -->
+  <div id="timerScreen" class="screen hidden">
+    <div class="matrix" id="matrix"></div>
+    <div class="terminal">
+      <div class="terminal-header">
+        <h1>SYSTEM RECOVERY PROTOCOL</h1>
+        <span>ACCESS: RESTRICTED</span>
+      </div>
+      <p>WARNING: System compromised by unauthorized access.</p>
+      <p>Initiate recovery sequence to regain control.</p>
+      <p>Time until system lockout:</p>
+      <div class="timer" id="timer">10:00</div>
+      <p>Enter recovery code:</p>
+      <input type="text" class="code-input" id="codeInput" maxlength="4" placeholder="Enter Code">
+      <div>
+        <button class="btn" id="submitCode">SUBMIT CODE</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Question Screen -->
+  <div id="questionScreen" class="screen hidden">
+    <div class="matrix" id="matrix2"></div>
+    <div class="terminal">
+      <div class="terminal-header">
+        <h1>SECURITY CHALLENGE</h1>
+        <span id="timeLeft">TIME: 30s</span>
+      </div>
+      <p>Complete the algorithm challenge to verify your identity.</p>
+      <div style="margin:18px 0; padding:14px; border:1px dashed #ff0000;">
+        <div id="questionText" class="question" style="font-size:1.1rem;"></div>
+        <input id="answerInput" class="answer-input" placeholder="Enter your answer..." />
+      </div>
+      <div>
+        <button class="btn" id="submitAnswer">SUBMIT ANSWER</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Result Screen -->
+  <div id="resultScreen" class="screen hidden">
+    <div class="matrix" id="matrix3"></div>
+    <div class="terminal">
+      <div class="terminal-header">
+        <h1>SYSTEM STATUS</h1>
+        <span>FINAL ANALYSIS</span>
+      </div>
+      <div id="resultMessage"></div>
+      <div class="completion-time" id="completionTime"></div>
+      <div style="margin-top:16px;">
+        <button class="btn" id="restartBtn">RESTART PROTOCOL</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    /* ========== DOM & State ========== */
+    const introScreen = document.getElementById('introScreen');
+    const timerScreen = document.getElementById('timerScreen');
+    const questionScreen = document.getElementById('questionScreen');
+    const resultScreen = document.getElementById('resultScreen');
+    const introVideo = document.getElementById('introVideo');
+    const playOverlay = document.getElementById('playWithSoundOverlay');
+    const playWithSoundBtn = document.getElementById('playWithSoundBtn');
+    const skipVideoBtn = document.getElementById('skipVideo');
+    const timerElement = document.getElementById('timer');
+    const codeInput = document.getElementById('codeInput');
+    const submitCode = document.getElementById('submitCode');
+    const questionText = document.getElementById('questionText');
+    const answerInput = document.getElementById('answerInput');
+    const submitAnswer = document.getElementById('submitAnswer');
+    const resultMessage = document.getElementById('resultMessage');
+    const restartBtn = document.getElementById('restartBtn');
+    const timeLeftElement = document.getElementById('timeLeft');
+    const completionTimeElement = document.getElementById('completionTime');
+
+    let timerInterval = null;
+    let questionTimer = null;
+    let timeLeft = 600; // 10 minutes
+    let questionTimeLeft = 30;
+    let startTime = null;
+    let completionTime = null;
+    let currentQuestion = null;
+
+    const questions = [
+      { question: "What is the time complexity of binary search?", answer: "o(log n)" },
+      { question: "What data structure uses LIFO (Last In First Out) principle?", answer: "stack" },
+      { question: "What is the worst-case time complexity of quicksort?", answer: "o(n^2)" },
+      { question: "Which algorithm is used to find the shortest path in an unweighted graph?", answer: "bfs" },
+      { question: "What is the space complexity of merge sort?", answer: "o(n)" }
+    ];
+
+    /* ========== Matrix Background ========== */
+    function createMatrixBackground(elementId) {
+      const container = document.getElementById(elementId);
+      if (!container) return;
+      const canvas = document.createElement('canvas');
+      container.appendChild(canvas);
+      const ctx = canvas.getContext('2d');
+
+      function resize() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+      }
+      resize();
+      window.addEventListener('resize', resize);
+
+      const fontSize = 14;
+      let columns = Math.floor(canvas.width / fontSize);
+      let drops = new Array(columns).fill(1);
+
+      function reinit() {
+        columns = Math.floor(canvas.width / fontSize);
+        drops = new Array(columns).fill(1);
+      }
+      reinit();
+
+      setInterval(() => {
+        // ensure columns reflect width if resized
+        if (Math.floor(canvas.width / fontSize) !== columns) reinit();
+        ctx.fillStyle = "rgba(0,0,0,0.05)";
+        ctx.fillRect(0,0,canvas.width,canvas.height);
+        ctx.fillStyle = "#ff0000";
+        ctx.font = fontSize + "px monospace";
+        for (let i=0;i<columns;i++){
+          const text = Math.random() > 0.5 ? '0' : '1';
+          ctx.fillText(text, i*fontSize, drops[i]*fontSize);
+          if (drops[i]*fontSize > canvas.height && Math.random() > 0.975) drops[i] = 0;
+          drops[i] += 1;
+        }
+      }, 40);
+    }
+
+    createMatrixBackground('matrix');
+    createMatrixBackground('matrix2');
+    createMatrixBackground('matrix3');
+
+    /* ========== Video autoplay / fallback handling ========== */
+
+    // Try to autoplay with sound. If blocked, autoplay muted and show overlay to enable sound.
+    async function tryAutoplayWithSound() {
+      // Start with sound unmuted attempt
+      try {
+        introVideo.muted = false;
+        await introVideo.play(); // may reject if autoplay blocked
+        // success: video playing with sound
+        playOverlay.style.display = 'none';
+      } catch (err) {
+        // autoplay with sound blocked -> fallback to muted autoplay
+        try {
+          introVideo.muted = true;
+          await introVideo.play();
+          // show overlay for user to enable sound (one click)
+          playOverlay.style.display = 'flex';
+        } catch (err2) {
+          // even muted autoplay blocked (rare) - show overlay to let user start
+          playOverlay.style.display = 'flex';
+        }
+      }
+    }
+
+    // Attempt autoplay on load
+    document.addEventListener('DOMContentLoaded', () => {
+      // Short delay to allow browser to settle
+      setTimeout(() => {
+        tryAutoplayWithSound();
+      }, 150);
+    });
+
+    // When user clicks overlay button, unmute and play from current time
+    playWithSoundBtn.addEventListener('click', async () => {
+      try {
+        introVideo.muted = false;
+        // Some browsers require a play call after unmuting
+        await introVideo.play();
+        playOverlay.style.display = 'none';
+      } catch (e) {
+        // fallback: set currentTime to same point and try again after unmute
+        introVideo.muted = false;
+        introVideo.play().catch(()=>{ /* if still blocked, no more options */ });
+        playOverlay.style.display = 'none';
+      }
+    });
+
+    // Also allow clicking the video area to unmute and play with sound (helpful for mobile)
+    introVideo.addEventListener('click', async () => {
+      if (introVideo.muted) {
+        introVideo.muted = false;
+        try { await introVideo.play(); } catch(e) {}
+        playOverlay.style.display = 'none';
+      }
+    });
+
+    // If video ends naturally, go to timer screen
+    introVideo.addEventListener('ended', () => showTimerScreen());
+
+    // Skip button
+    skipVideoBtn.addEventListener('click', () => {
+      // if video playing, pause it
+      introVideo.pause();
+      // hide overlay if visible
+      playOverlay.style.display = 'none';
+      showTimerScreen();
+    });
+
+    // If autoplay fails entirely and the user never interacts, after a short timeout show timer screen
+    setTimeout(() => {
+      // if video hasn't started playing and overlay is visible, allow user to decide;
+      // but if overlay hidden and video is paused, show timer after 8s to avoid blocking
+      if (introVideo.paused && playOverlay.style.display !== 'flex') {
+        // don't auto-advance immediately if user may want to click - keep to 8s
+        // (we only auto-advance to keep UX predictable)
+        showTimerScreen();
+      }
+    }, 8000);
+
+    /* ========== Screen & Timer Logic ========== */
+    function showTimerScreen() {
+      introScreen.classList.add('hidden');
+      timerScreen.classList.remove('hidden');
+      // record start time
+      startTime = new Date();
+      startTimer();
+    }
+
+    function startTimer() {
+      if (timerInterval) clearInterval(timerInterval);
+      timerInterval = setInterval(() => {
+        timeLeft--;
+        const m = Math.floor(timeLeft / 60);
+        const s = timeLeft % 60;
+        timerElement.textContent = `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+        if (timeLeft <= 0) {
+          clearInterval(timerInterval);
+          showResult(false, "Time's up! System permanently locked.");
+        }
+      }, 1000);
+    }
+
+    submitCode.addEventListener('click', checkCode);
+    codeInput.addEventListener('keypress', (e)=>{ if (e.key === 'Enter') checkCode(); });
+
+    function checkCode() {
+      if (codeInput.value.trim() === '2777') {
+        if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
+        timerScreen.classList.add('hidden');
+        questionScreen.classList.remove('hidden');
+        askQuestion();
+      } else {
+        codeInput.value = '';
+        codeInput.placeholder = 'INVALID CODE - TRY AGAIN';
+        codeInput.focus();
+      }
+    }
+
+    function askQuestion() {
+      if (questionTimer) clearInterval(questionTimer);
+      questionTimeLeft = 30;
+      timeLeftElement.textContent = `TIME: ${questionTimeLeft}s`;
+      const idx = Math.floor(Math.random() * questions.length);
+      currentQuestion = questions[idx];
+      questionText.textContent = currentQuestion.question;
+      answerInput.value = '';
+      answerInput.focus();
+
+      questionTimer = setInterval(() => {
+        questionTimeLeft--;
+        timeLeftElement.textContent = `TIME: ${questionTimeLeft}s`;
+        if (questionTimeLeft <= 0) {
+          clearInterval(questionTimer);
+          checkAnswer(); // auto-submit
+        }
+      }, 1000);
+    }
+
+    submitAnswer.addEventListener('click', checkAnswer);
+    answerInput.addEventListener('keypress', (e)=>{ if (e.key === 'Enter') checkAnswer(); });
+
+    function checkAnswer() {
+      if (questionTimer) { clearInterval(questionTimer); questionTimer = null; }
+      completionTime = new Date();
+      const userAnswer = (answerInput.value || '').trim().toLowerCase();
+      const correct = (currentQuestion.answer || '').toLowerCase();
+      if (userAnswer === correct) {
+        showResult(true, "SRM-ONE IS BACK LIVE! System recovery successful.");
+      } else {
+        showResult(false, "YOUR ACCOUNT IS STILL UNDER HACKER CONTROL. Security protocol failed.");
+      }
+    }
+
+    function showResult(success, message) {
+      questionScreen.classList.add('hidden');
+      resultScreen.classList.remove('hidden');
+
+      // compute completion time
+      let formatted = "00:00";
+      if (startTime && completionTime) {
+        const diff = completionTime - startTime;
+        const mins = Math.floor(diff / 60000);
+        const secs = Math.floor((diff % 60000) / 1000);
+        formatted = `${String(mins).padStart(2,'0')}:${String(secs).padStart(2,'0')}`;
+      }
+      completionTimeElement.textContent = `Completion Time: ${formatted}`;
+
+      if (success) {
+        resultMessage.innerHTML = `<h2 class="success">ACCESS GRANTED</h2><p>${message}</p>`;
+      } else {
+        resultMessage.innerHTML = `<h2 class="error">ACCESS DENIED</h2><p>${message}</p>`;
+      }
+    }
+
+    restartBtn.addEventListener('click', restartProtocol);
+
+    function restartProtocol() {
+      // reset state
+      timeLeft = 600; questionTimeLeft = 30;
+      timerElement.textContent = "10:00";
+      codeInput.value = ''; codeInput.placeholder = '';
+      answerInput.value = '';
+      resultScreen.classList.add('hidden');
+      introScreen.classList.remove('hidden');
+
+      // rewind video and attempt autoplay again
+      try {
+        introVideo.currentTime = 0;
+      } catch(e) {}
+      tryAutoplayWithSound();
+    }
+
+    // Safety: stop timers when page unloads
+    window.addEventListener('beforeunload', () => {
+      clearInterval(timerInterval);
+      clearInterval(questionTimer);
+    });
+  </script>
+</body>
+</html>
